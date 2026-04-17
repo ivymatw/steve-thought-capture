@@ -1,0 +1,553 @@
+From 27520fdbb9595357ed2722c51addb36a5b8acc78 Mon Sep 17 00:00:00 2001
+From: Ivy Ma <ivyma.tw@gmail.com>
+Date: Fri, 17 Apr 2026 11:04:16 +0800
+Subject: [PATCH 1/2] feat: bridge telegram voice into steve pipeline
+
+---
+ gateway/run.py                             |  48 +++++++-
+ gateway/steve_voice.py                     | 128 +++++++++++++++++++++
+ tests/gateway/test_steve_voice_pipeline.py |  69 +++++++++++
+ 3 files changed, 244 insertions(+), 1 deletion(-)
+ create mode 100644 gateway/steve_voice.py
+ create mode 100644 tests/gateway/test_steve_voice_pipeline.py
+
+diff --git a/gateway/run.py b/gateway/run.py
+index ebaa0447..32f7a1e2 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -252,6 +252,11 @@ from gateway.session import (
+     build_session_key,
+ )
+ from gateway.delivery import DeliveryRouter
++from gateway.steve_voice import (
++    execute_steve_thought_capture_pipeline,
++    format_steve_thought_capture_result,
++    resolve_steve_thought_capture_root,
++)
+ from gateway.platforms.base import (
+     BasePlatformAdapter,
+     MessageEvent,
+@@ -2974,9 +2979,10 @@ class GatewayRunner:
+                 )
+ 
+             if audio_paths:
+-                message_text = await self._enrich_message_with_transcription(
++                message_text = await self._enrich_message_with_voice_pipeline(
+                     message_text,
+                     audio_paths,
++                    source,
+                 )
+                 _stt_fail_markers = (
+                     "No STT provider",
+@@ -7056,6 +7062,46 @@ class GatewayRunner:
+             return prefix
+         return user_text
+ 
++    async def _enrich_message_with_voice_pipeline(
++        self,
++        user_text: str,
++        audio_paths: List[str],
++        source,
++    ) -> str:
++        project_root = resolve_steve_thought_capture_root(self.config, source)
++        if not project_root:
++            return await self._enrich_message_with_transcription(user_text, audio_paths)
++
++        enriched_parts = []
++        for path in audio_paths:
++            try:
++                logger.debug("Running Steve voice pipeline for %s", path)
++                result = await asyncio.to_thread(
++                    execute_steve_thought_capture_pipeline,
++                    path,
++                    source,
++                    project_root,
++                )
++                enriched_parts.append(format_steve_thought_capture_result(result))
++            except Exception as exc:
++                logger.warning(
++                    "Steve voice pipeline failed for %s, falling back to generic STT: %s",
++                    path,
++                    exc,
++                    exc_info=True,
++                )
++                return await self._enrich_message_with_transcription(user_text, audio_paths)
++
++        if enriched_parts:
++            prefix = "\n\n".join(enriched_parts)
++            _placeholder = "(The user sent a message with no text content)"
++            if user_text and user_text.strip() == _placeholder:
++                return prefix
++            if user_text:
++                return f"{prefix}\n\n{user_text}"
++            return prefix
++        return await self._enrich_message_with_transcription(user_text, audio_paths)
++
+     async def _enrich_message_with_transcription(
+         self,
+         user_text: str,
+diff --git a/gateway/steve_voice.py b/gateway/steve_voice.py
+new file mode 100644
+index 00000000..e8ff68d4
+--- /dev/null
++++ b/gateway/steve_voice.py
+@@ -0,0 +1,128 @@
++from __future__ import annotations
++
++import importlib
++import mimetypes
++import os
++import sys
++from dataclasses import asdict, is_dataclass
++from pathlib import Path
++from typing import Any, Iterable
++
++from gateway.config import Platform
++
++
++def _normalize_project_root(path: str | os.PathLike[str] | None) -> Path | None:
++    if not path:
++        return None
++    root = Path(path).expanduser().resolve()
++    if not (root / "src").exists():
++        return None
++    return root
++
++
++def resolve_steve_thought_capture_root(config, source) -> Path | None:
++    if getattr(source, "platform", None) != Platform.TELEGRAM:
++        return None
++
++    env_root = _normalize_project_root(os.getenv("HERMES_STEVE_THOUGHT_CAPTURE_ROOT"))
++    if not env_root:
++        telegram_cfg = (getattr(config, "platforms", {}) or {}).get(Platform.TELEGRAM)
++        extra = getattr(telegram_cfg, "extra", {}) if telegram_cfg else {}
++        env_root = _normalize_project_root(extra.get("steve_thought_capture_root"))
++    if not env_root:
++        return None
++
++    allowed_chat_ids = os.getenv("HERMES_STEVE_THOUGHT_CAPTURE_CHAT_IDS") or os.getenv("HERMES_STEVE_THOUGHT_CAPTURE_CHAT_ID")
++    if allowed_chat_ids:
++        allowed = {item.strip() for item in allowed_chat_ids.split(",") if item.strip()}
++        if allowed and str(getattr(source, "chat_id", "")) not in allowed:
++            return None
++    return env_root
++
++
++def _mime_type_for_audio(audio_path: str | os.PathLike[str]) -> str:
++    guessed = mimetypes.guess_type(str(audio_path))[0]
++    return guessed or "application/octet-stream"
++
++
++def execute_steve_thought_capture_pipeline(audio_path: str, source, project_root: Path) -> dict:
++    src_dir = project_root / "src"
++    if not src_dir.exists():
++        raise FileNotFoundError(f"steve-thought-capture src directory not found under {project_root}")
++    if str(src_dir) not in sys.path:
++        sys.path.insert(0, str(src_dir))
++
++    importlib.invalidate_caches()
++    models = importlib.import_module("steve_thought_capture.models")
++    pipeline = importlib.import_module("steve_thought_capture.pipeline")
++    steve_context = importlib.import_module("steve_thought_capture.steve_context")
++
++    voice_event = models.VoiceEvent(
++        platform="telegram",
++        chat_id=str(getattr(source, "chat_id", "")),
++        thread_id=getattr(source, "thread_id", None),
++        user_id=str(getattr(source, "user_id", "") or ""),
++        message_id=Path(audio_path).stem,
++        audio_path=str(Path(audio_path).expanduser().resolve()),
++        mime_type=_mime_type_for_audio(audio_path),
++        duration_seconds=None,
++        received_at=None,
++    )
++    context = steve_context.load_steve_context(project_root)
++    return pipeline.process_voice_event(voice_event, context)
++
++
++def _jsonable(value: Any) -> Any:
++    if is_dataclass(value):
++        return {k: _jsonable(v) for k, v in asdict(value).items()}
++    if isinstance(value, dict):
++        return {k: _jsonable(v) for k, v in value.items()}
++    if isinstance(value, (list, tuple)):
++        return [_jsonable(v) for v in value]
++    return value
++
++
++def _extract_action_types(actions: Iterable[Any]) -> list[str]:
++    action_types: list[str] = []
++    for action in actions or []:
++        action_json = _jsonable(action)
++        if isinstance(action_json, dict):
++            action_type = str(action_json.get("action_type") or action_json.get("action") or "").strip()
++            if action_type:
++                action_types.append(action_type)
++    return action_types
++
++
++def format_steve_thought_capture_result(result: dict) -> str:
++    payload = _jsonable(result)
++    status = str(payload.get("status") or "unknown")
++
++    if status == "ok":
++        normalized = payload.get("normalized_transcript") or {}
++        intent = payload.get("intent_decision") or {}
++        actions = _extract_action_types(payload.get("actions") or [])
++        normalized_text = str(normalized.get("normalized_text") or "").strip()
++        primary_intent = str(intent.get("primary_intent") or "").strip()
++        action_text = ", ".join(actions) if actions else "none"
++        return (
++            "[The user sent a voice message. Steve voice pipeline output: "
++            f'Normalized transcript: "{normalized_text}". '
++            f"Primary intent: {primary_intent or 'unknown'}. "
++            f"Planned actions: {action_text}.]"
++        )
++
++    if status == "needs_clarification":
++        question = str(payload.get("clarification_question") or "Please clarify.").strip()
++        return (
++            "[The user sent a voice message. Steve voice pipeline needs clarification "
++            f"before actioning it: {question}]"
++        )
++
++    if status == "asr_failed":
++        error = str(payload.get("error") or "unknown error").strip()
++        return (
++            "[The user sent a voice message. Steve voice pipeline could not transcribe it: "
++            f"{error}]"
++        )
++
++    return f"[The user sent a voice message. Steve voice pipeline returned status: {status}]"
+diff --git a/tests/gateway/test_steve_voice_pipeline.py b/tests/gateway/test_steve_voice_pipeline.py
+new file mode 100644
+index 00000000..ed1a111a
+--- /dev/null
++++ b/tests/gateway/test_steve_voice_pipeline.py
+@@ -0,0 +1,69 @@
++from unittest.mock import patch
++
++import pytest
++
++from gateway.config import GatewayConfig, Platform
++from gateway.platforms.base import MessageEvent, MessageType
++from gateway.session import SessionSource
++
++
++@pytest.mark.asyncio
++async def test_prepare_inbound_message_text_uses_steve_voice_pipeline_when_configured(monkeypatch, tmp_path):
++    from gateway.run import GatewayRunner
++
++    runner = GatewayRunner.__new__(GatewayRunner)
++    runner.config = GatewayConfig(stt_enabled=True)
++    runner.adapters = {}
++    runner._model = "test-model"
++    runner._base_url = ""
++    runner._has_setup_skill = lambda: False
++
++    project_root = tmp_path / "steve-thought-capture"
++    (project_root / "src").mkdir(parents=True)
++    monkeypatch.setenv("HERMES_STEVE_THOUGHT_CAPTURE_ROOT", str(project_root))
++
++    source = SessionSource(
++        platform=Platform.TELEGRAM,
++        chat_id="123",
++        chat_type="dm",
++        user_id="steve",
++        user_name="Steve",
++    )
++    event = MessageEvent(
++        text="",
++        message_type=MessageType.VOICE,
++        source=source,
++        media_urls=["/tmp/queued-voice.ogg"],
++        media_types=["audio/ogg"],
++    )
++
++    pipeline_result = {
++        "status": "ok",
++        "normalized_transcript": {
++            "normalized_text": "麥克風測試 我最喜歡的model是anthropic opus",
++        },
++        "intent_decision": {
++            "primary_intent": "conversation_reply",
++        },
++        "actions": [
++            {"action_type": "reply"},
++        ],
++    }
++
++    with patch(
++        "gateway.run.execute_steve_thought_capture_pipeline",
++        return_value=pipeline_result,
++    ), patch(
++        "tools.transcription_tools.transcribe_audio",
++        side_effect=AssertionError("generic STT should not be called when Steve voice pipeline is enabled"),
++    ):
++        result = await runner._prepare_inbound_message_text(
++            event=event,
++            source=source,
++            history=[],
++        )
++
++    assert result is not None
++    assert "麥克風測試" in result
++    assert "conversation_reply" in result
++    assert "reply" in result
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 8d8458c5d6455c84e6a0075ed2ffe5dae8da7d05 Mon Sep 17 00:00:00 2001
+From: Ivy Ma <ivyma.tw@gmail.com>
+Date: Fri, 17 Apr 2026 11:30:01 +0800
+Subject: [PATCH 2/2] feat: route Telegram voice through Steve pipeline
+
+---
+ gateway/run.py                             | 24 ++++++-
+ gateway/steve_voice.py                     | 47 +++++++++++++
+ tests/gateway/test_steve_voice_pipeline.py | 77 ++++++++++++++++++++--
+ 3 files changed, 140 insertions(+), 8 deletions(-)
+
+diff --git a/gateway/run.py b/gateway/run.py
+index 32f7a1e2..4886689a 100644
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@ -253,6 +253,7 @@ from gateway.session import (
+ )
+ from gateway.delivery import DeliveryRouter
+ from gateway.steve_voice import (
++    build_steve_thought_capture_gateway_outcome,
+     execute_steve_thought_capture_pipeline,
+     format_steve_thought_capture_result,
+     resolve_steve_thought_capture_root,
+@@ -2980,10 +2981,13 @@ class GatewayRunner:
+ 
+             if audio_paths:
+                 message_text = await self._enrich_message_with_voice_pipeline(
++                    event,
+                     message_text,
+                     audio_paths,
+                     source,
+                 )
++                if message_text is None:
++                    return None
+                 _stt_fail_markers = (
+                     "No STT provider",
+                     "STT is disabled",
+@@ -7064,10 +7068,11 @@ class GatewayRunner:
+ 
+     async def _enrich_message_with_voice_pipeline(
+         self,
++        event: MessageEvent,
+         user_text: str,
+         audio_paths: List[str],
+         source,
+-    ) -> str:
++    ) -> Optional[str]:
+         project_root = resolve_steve_thought_capture_root(self.config, source)
+         if not project_root:
+             return await self._enrich_message_with_transcription(user_text, audio_paths)
+@@ -7082,7 +7087,20 @@ class GatewayRunner:
+                     source,
+                     project_root,
+                 )
+-                enriched_parts.append(format_steve_thought_capture_result(result))
++                outcome = build_steve_thought_capture_gateway_outcome(result, user_text=user_text)
++                if outcome.get("kind") == "reply":
++                    adapter = self.adapters.get(source.platform)
++                    if adapter:
++                        metadata = {"thread_id": source.thread_id} if source.thread_id else None
++                        await adapter.send(
++                            source.chat_id,
++                            outcome.get("text", ""),
++                            reply_to=event.message_id,
++                            metadata=metadata,
++                        )
++                        return None
++                    return outcome.get("text") or user_text
++                enriched_parts.append(outcome.get("text") or format_steve_thought_capture_result(result))
+             except Exception as exc:
+                 logger.warning(
+                     "Steve voice pipeline failed for %s, falling back to generic STT: %s",
+@@ -7093,6 +7111,8 @@ class GatewayRunner:
+                 return await self._enrich_message_with_transcription(user_text, audio_paths)
+ 
+         if enriched_parts:
++            if len(enriched_parts) == 1:
++                return enriched_parts[0]
+             prefix = "\n\n".join(enriched_parts)
+             _placeholder = "(The user sent a message with no text content)"
+             if user_text and user_text.strip() == _placeholder:
+diff --git a/gateway/steve_voice.py b/gateway/steve_voice.py
+index e8ff68d4..a0389caf 100644
+--- a/gateway/steve_voice.py
++++ b/gateway/steve_voice.py
+@@ -93,6 +93,53 @@ def _extract_action_types(actions: Iterable[Any]) -> list[str]:
+     return action_types
+ 
+ 
++def build_steve_thought_capture_gateway_outcome(result: dict, user_text: str = "") -> dict[str, str]:
++    payload = _jsonable(result)
++    status = str(payload.get("status") or "unknown")
++    user_text = (user_text or "").strip()
++
++    if status == "ok":
++        normalized = payload.get("normalized_transcript") or {}
++        intent = payload.get("intent_decision") or {}
++        actions = _extract_action_types(payload.get("actions") or [])
++        normalized_text = str(normalized.get("normalized_text") or "").strip()
++        primary_intent = str(intent.get("primary_intent") or "").strip()
++        action_text = ", ".join(actions) if actions else "none"
++
++        if "reply" in actions and normalized_text:
++            text = normalized_text
++            if user_text:
++                text = f"{text}\n\n{user_text}"
++            return {"kind": "agent", "text": text}
++
++        instruction_parts = [
++            "[The user sent a voice message. Steve voice pipeline classified it before agent handling.",
++            f'Normalized transcript: "{normalized_text}".' if normalized_text else "Normalized transcript: \"\".",
++            f"Primary intent: {primary_intent or 'unknown'}.",
++            f"Planned actions: {action_text}.",
++            "Handle this request according to the planned action and reply to the user with the result.]",
++        ]
++        text = " ".join(part for part in instruction_parts if part)
++        if user_text:
++            text = f"{text}\n\n{user_text}"
++        return {"kind": "agent", "text": text}
++
++    if status == "needs_clarification":
++        question = str(payload.get("clarification_question") or "請再說清楚一點，我才能幫你處理。").strip()
++        return {"kind": "reply", "text": question}
++
++    if status == "asr_failed":
++        return {
++            "kind": "reply",
++            "text": "我收到你的語音了，但這次沒能成功轉成文字。請再說一次，或直接打字給我。",
++        }
++
++    return {
++        "kind": "reply",
++        "text": f"我收到你的語音了，但這次的處理狀態是 {status}。請再試一次，或直接打字給我。",
++    }
++
++
+ def format_steve_thought_capture_result(result: dict) -> str:
+     payload = _jsonable(result)
+     status = str(payload.get("status") or "unknown")
+diff --git a/tests/gateway/test_steve_voice_pipeline.py b/tests/gateway/test_steve_voice_pipeline.py
+index ed1a111a..a7e16d89 100644
+--- a/tests/gateway/test_steve_voice_pipeline.py
++++ b/tests/gateway/test_steve_voice_pipeline.py
+@@ -1,4 +1,5 @@
+-from unittest.mock import patch
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, patch
+ 
+ import pytest
+ 
+@@ -13,7 +14,7 @@ async def test_prepare_inbound_message_text_uses_steve_voice_pipeline_when_confi
+ 
+     runner = GatewayRunner.__new__(GatewayRunner)
+     runner.config = GatewayConfig(stt_enabled=True)
+-    runner.adapters = {}
++    runner.adapters = {Platform.TELEGRAM: SimpleNamespace(send=AsyncMock())}
+     runner._model = "test-model"
+     runner._base_url = ""
+     runner._has_setup_skill = lambda: False
+@@ -35,6 +36,7 @@ async def test_prepare_inbound_message_text_uses_steve_voice_pipeline_when_confi
+         source=source,
+         media_urls=["/tmp/queued-voice.ogg"],
+         media_types=["audio/ogg"],
++        message_id="msg-1",
+     )
+ 
+     pipeline_result = {
+@@ -51,6 +53,9 @@ async def test_prepare_inbound_message_text_uses_steve_voice_pipeline_when_confi
+     }
+ 
+     with patch(
++        "gateway.run.resolve_steve_thought_capture_root",
++        return_value=project_root,
++    ), patch(
+         "gateway.run.execute_steve_thought_capture_pipeline",
+         return_value=pipeline_result,
+     ), patch(
+@@ -63,7 +68,67 @@ async def test_prepare_inbound_message_text_uses_steve_voice_pipeline_when_confi
+             history=[],
+         )
+ 
+-    assert result is not None
+-    assert "麥克風測試" in result
+-    assert "conversation_reply" in result
+-    assert "reply" in result
++    assert result == "麥克風測試 我最喜歡的model是anthropic opus"
++    runner.adapters[Platform.TELEGRAM].send.assert_not_awaited()
++
++
++@pytest.mark.asyncio
++async def test_prepare_inbound_message_text_replies_directly_for_steve_voice_clarification(monkeypatch, tmp_path):
++    from gateway.run import GatewayRunner
++
++    runner = GatewayRunner.__new__(GatewayRunner)
++    runner.config = GatewayConfig(stt_enabled=True)
++    runner.adapters = {Platform.TELEGRAM: SimpleNamespace(send=AsyncMock())}
++    runner._model = "test-model"
++    runner._base_url = ""
++    runner._has_setup_skill = lambda: False
++
++    project_root = tmp_path / "steve-thought-capture"
++    (project_root / "src").mkdir(parents=True)
++    monkeypatch.setenv("HERMES_STEVE_THOUGHT_CAPTURE_ROOT", str(project_root))
++
++    source = SessionSource(
++        platform=Platform.TELEGRAM,
++        chat_id="123",
++        chat_type="dm",
++        user_id="steve",
++        user_name="Steve",
++        thread_id="42",
++    )
++    event = MessageEvent(
++        text="",
++        message_type=MessageType.VOICE,
++        source=source,
++        media_urls=["/tmp/queued-voice.ogg"],
++        media_types=["audio/ogg"],
++        message_id="msg-clarify",
++    )
++
++    pipeline_result = {
++        "status": "needs_clarification",
++        "clarification_question": "這段是要記成 note，還是 task？",
++    }
++
++    with patch(
++        "gateway.run.resolve_steve_thought_capture_root",
++        return_value=project_root,
++    ), patch(
++        "gateway.run.execute_steve_thought_capture_pipeline",
++        return_value=pipeline_result,
++    ), patch(
++        "tools.transcription_tools.transcribe_audio",
++        side_effect=AssertionError("generic STT should not be called when Steve voice pipeline is enabled"),
++    ):
++        result = await runner._prepare_inbound_message_text(
++            event=event,
++            source=source,
++            history=[],
++        )
++
++    assert result is None
++    runner.adapters[Platform.TELEGRAM].send.assert_awaited_once_with(
++        "123",
++        "這段是要記成 note，還是 task？",
++        reply_to="msg-clarify",
++        metadata={"thread_id": "42"},
++    )
+-- 
+2.50.1 (Apple Git-155)
+
