@@ -6,7 +6,8 @@ from pathlib import Path
 
 from steve_thought_capture.models import PreparedAudio
 
-SUPPORTED_NATIVE_FORMATS = {"ogg", "wav", "mp3", "flac", "opus"}
+PASSTHROUGH_FORMATS = {"wav", "flac"}
+FORCE_CONVERT_FORMATS = {"ogg", "opus", "mp3", "m4a", "aac", "webm"}
 
 
 def _find_ffmpeg() -> str | None:
@@ -21,7 +22,7 @@ def _convert_with_ffmpeg(src: str, dst: str, ffmpeg_bin: str) -> str:
 def prepare_audio(audio_path: str | Path) -> PreparedAudio:
     path = Path(audio_path).expanduser().resolve()
     ext = path.suffix.lower().lstrip(".")
-    if ext in SUPPORTED_NATIVE_FORMATS:
+    if ext in PASSTHROUGH_FORMATS:
         return PreparedAudio(str(path), str(path), ext, ext, False)
 
     ffmpeg_bin = _find_ffmpeg()
@@ -30,4 +31,5 @@ def prepare_audio(audio_path: str | Path) -> PreparedAudio:
 
     converted = str(path.with_suffix(".wav"))
     prepared = _convert_with_ffmpeg(str(path), converted, ffmpeg_bin)
-    return PreparedAudio(str(path), prepared, ext, "wav", True)
+    original_format = ext or "unknown"
+    return PreparedAudio(str(path), prepared, original_format, "wav", True)
