@@ -11,6 +11,21 @@ Reproduce the current state where:
 - `needs_clarification` replies directly in Telegram
 - `asr_failed` replies directly in Telegram
 - Telegram `.ogg` voice notes are converted to `.wav` before ASR
+- the default local production ASR path is now `Breeze-ASR-25 whisper.cpp q5_k`, not `large-v3-turbo`
+
+## Current ASR default
+
+As of the latest checked-in state, `configs/asr.yaml` points to:
+- `backend: whisper_cpp`
+- `model_name: breeze-asr-25-q5_k`
+- `model_path: /Users/ivyma/workspace-max/steve-thought-capture/models/Breeze-ASR-25-whispercpp/ggml-model-q5_k.bin`
+
+Important evidence files for another agent:
+- `docs/breeze-whispercpp-smoke-test-2026-04-17.md`
+- `docs/asr-hardset-breeze-vs-large-v3-turbo-2026-04-17.md`
+- `outputs/asr-bakeoff/breeze-whispercpp-q5k-results-15.jsonl`
+- `outputs/asr-bakeoff/breeze-whispercpp-q5k-hardset-10.jsonl`
+- `outputs/asr-bakeoff/baseline-large-v3-turbo-hardset-10.jsonl`
 
 ## What is already done
 
