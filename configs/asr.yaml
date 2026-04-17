@@ -20,10 +20,3 @@ openai_whisper_api:
   enabled: false
   model_name: whisper-1
   language_mode: auto
-
-notes:
-  default_v1_choice: whisper.cpp + large-v3-turbo
-  rationale:
-    - currently verified working local path on this machine
-    - strong enough for Steve's mixed Chinese/English and proper noun usage
-    - local-first and cloud-independent by default
