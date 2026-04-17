@@ -1,9 +1,9 @@
 backend: whisper_cpp
 
 whisper_cpp:
-  model_name: large-v3-turbo
+  model_name: breeze-asr-25-q5_k
   binary_path: /Users/ivyma/workspace-max/voice-frontend/vendor/whisper.cpp/build/bin/whisper-cli
-  model_path: /Users/ivyma/workspace-max/voice-frontend/vendor/whisper.cpp/models/ggml-large-v3-turbo.bin
+  model_path: /Users/ivyma/workspace-max/steve-thought-capture/models/Breeze-ASR-25-whispercpp/ggml-model-q5_k.bin
   language_mode: auto
   prompt_terms: []
   convert_if_needed: true
