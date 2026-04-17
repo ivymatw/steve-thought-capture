@@ -182,3 +182,24 @@ And on this machine, that path already delivered:
 - much smaller runtime artifacts
 - nearly the same transcript quality
 - preservation of the most important mixed-language wins
+
+## Production-path switch confirmation
+
+After the above smoke work, the default ASR config was updated to:
+- `model_name: breeze-asr-25-q5_k`
+- `model_path: /Users/ivyma/workspace-max/steve-thought-capture/models/Breeze-ASR-25-whispercpp/ggml-model-q5_k.bin`
+
+A post-switch verification was then performed on a fresh real Telegram clip:
+- cached audio: `audio_1af92b5380b9.ogg`
+- cached transcript: `我剛剛就發語音了你確認一下是不是用 breeze`
+
+The same clip was re-run through the actual project path using:
+- `load_steve_context('.')`
+- `prepare_audio(...)`
+- `transcribe_audio(...)`
+
+Verified result:
+- model: `breeze-asr-25-q5_k`
+- transcript: `我剛剛就發語音了你確認一下是不是用 breeze`
+
+This confirms that the production-default local ASR path was actually switched, and that the latest tested Telegram voice input was processed through Breeze rather than the old `large-v3-turbo` path.
