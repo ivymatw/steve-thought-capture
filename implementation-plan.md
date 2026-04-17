@@ -53,6 +53,7 @@ steve-thought-capture/
   architecture.md
   implementation-plan.md
   configs/
+    asr.yaml
     lexicon.yaml
     correction_map.yaml
     routing_preferences.yaml
@@ -134,6 +135,7 @@ git commit -m "feat: scaffold source package"
 **Objective:** Establish editable Steve-aware artifacts before implementing behavior.
 
 **Files:**
+- Create: `configs/asr.yaml`
 - Create: `configs/lexicon.yaml`
 - Create: `configs/correction_map.yaml`
 - Create: `configs/routing_preferences.yaml`
@@ -141,7 +143,7 @@ git commit -m "feat: scaffold source package"
 
 **Step 1: Write failing test**
 
-Create `tests/test_steve_context.py` with a test that loads all four files and asserts the expected top-level keys exist.
+Create `tests/test_steve_context.py` with a test that loads all five files and asserts the expected top-level keys exist.
 
 **Step 2: Run test to verify failure**
 
@@ -155,6 +157,14 @@ Expected: FAIL — files missing.
 Create minimal YAML files with explicit top-level structures.
 
 Suggested starter content:
+
+`configs/asr.yaml`
+```yaml
+backend: whisper_cpp
+whisper_cpp:
+  model_name: large-v3-turbo
+  language_mode: auto
+```
 
 `configs/lexicon.yaml`
 ```yaml

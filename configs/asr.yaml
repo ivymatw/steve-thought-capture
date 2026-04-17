@@ -1,0 +1,29 @@
+backend: whisper_cpp
+
+whisper_cpp:
+  model_name: large-v3-turbo
+  binary_path: /Users/ivyma/workspace-max/voice-frontend/vendor/whisper.cpp/build/bin/whisper-cli
+  model_path: /Users/ivyma/workspace-max/voice-frontend/vendor/whisper.cpp/models/ggml-large-v3-turbo.bin
+  language_mode: auto
+  prompt_terms: []
+  convert_if_needed: true
+
+faster_whisper:
+  enabled: false
+  model_name: large-v3
+  device: auto
+  compute_type: auto
+  language_mode: auto
+  prompt_terms: []
+
+openai_whisper_api:
+  enabled: false
+  model_name: whisper-1
+  language_mode: auto
+
+notes:
+  default_v1_choice: whisper.cpp + large-v3-turbo
+  rationale:
+    - currently verified working local path on this machine
+    - strong enough for Steve's mixed Chinese/English and proper noun usage
+    - local-first and cloud-independent by default

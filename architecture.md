@@ -154,6 +154,82 @@ Important design rule:
 - the transcription module should know nothing about notes, tasks, or routing
 - it only turns audio into text
 
+### 3a. ASR backend/model strategy
+
+The system must treat ASR backend selection as a configurable strategy, not a hardcoded implementation detail.
+
+Why:
+- Steve's use case depends on mixed Chinese/English handling and proper noun accuracy
+- speed/quality trade-offs may change over time
+- the currently verified local path may not remain the long-term best path
+- experimentation should not require pipeline rewrites
+
+#### Default v1 choice
+
+Default v1 backend:
+- `whisper_cpp`
+
+Default v1 model:
+- `large-v3-turbo`
+
+Reason:
+- this is the currently verified working local path on this machine
+- it is meaningfully stronger than smaller defaults for Steve's code-switching and proper noun usage
+- it preserves the local-first requirement without introducing cloud dependence
+
+#### Strategy dimensions
+
+The ASR strategy must make these dimensions explicit:
+- backend
+- model name
+- binary/runtime path
+- model file path
+- language mode
+- optional prompt or lexicon biasing
+- optional conversion policy
+
+#### Supported evolution path
+
+The architecture should support three kinds of future changes:
+
+1. Same backend, different model
+- example: `large-v3-turbo` -> `medium`
+- lowest-risk change
+- should require config-only updates
+
+2. Same model family, different runtime
+- example: `whisper.cpp` -> `faster-whisper`
+- useful for latency or deployment trade-offs
+- should not require changes to routing or interpretation logic
+
+3. Different backend entirely
+- example: future local ASR engine or a domain-specialized backend
+- higher-risk change
+- should still fit behind the same transcription interface
+
+#### Required abstraction boundary
+
+All downstream modules should depend on a stable transcription contract:
+- input: prepared audio + ASR config + Steve context hints
+- output: `TranscriptResult`
+
+No downstream module should need to know:
+- whether the backend was whisper.cpp or something else
+- which exact model family was used
+- whether conversion happened internally
+
+#### Configuration artifact
+
+Backend/model choices should live in a dedicated config artifact:
+- `configs/asr.yaml`
+
+That file should be the single source of truth for:
+- backend choice
+- model choice
+- runtime paths
+- language behavior
+- prompt/lexicon hooks
+
 ### 4. Normalization module
 
 Responsibility:
