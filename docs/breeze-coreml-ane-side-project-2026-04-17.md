@@ -154,11 +154,49 @@ If the 5-clip follow-up still shows:
 
 then the side project should be closed as not worth the added complexity.
 
+## 5-clip warm-only follow-up
+
+A broader warm-only benchmark was then run on 5 recent real Telegram clips using:
+- `outputs/asr-bakeoff/coreml-sideproject-manifest-5.jsonl`
+- `scripts/run_whispercpp_warm_benchmark.py`
+- output: `outputs/asr-bakeoff/coreml-sideproject-warm-benchmark-5.jsonl`
+
+Method:
+- for each clip and each runtime, run one throwaway warmup pass
+- then record the second pass as the timed comparison
+
+Compared:
+1. current production `Breeze q5_k + Metal`
+2. side-project `Breeze q5_k + CoreML/ANE hybrid`
+
+### Warm-only timing result
+
+Average timed latency across the 5 clips:
+- production q5_k Metal: `2.154s`
+- CoreML / ANE hybrid q5_k: `3.118s`
+
+Difference:
+- CoreML / ANE hybrid was slower by about `964 ms` on average
+- CoreML / ANE hybrid was about `1.448x` the latency of the current production path
+
+### Transcript comparison
+
+Across all 5 clips:
+- timed transcript differences: `0`
+
+That means the CoreML / ANE hybrid path did not buy better transcription quality on this sample set.
+It only added latency and complexity.
+
 ## Bottom line
 
 The CoreML / ANE version is technically runnable on this machine.
-But the first real probe does not show a meaningful advantage.
+But after both:
+- the first real single-clip probe, and
+- the 5-clip warm-only follow-up,
+
+it still does not show a meaningful advantage.
 
 Right now it looks like:
 - interesting engineering
 - not yet a better production choice
+- probably not worth further investment unless a specific longer-audio use case suggests ANE might win there
